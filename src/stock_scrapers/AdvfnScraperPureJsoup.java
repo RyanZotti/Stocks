@@ -17,7 +17,7 @@ import org.openqa.selenium.firefox.FirefoxDriver;
 //http://stackoverflow.com/questions/10553677/eclipse-how-to-give-dependency-between-projects
 import utility.SqlToolbox;
 
-public class AdvfnScraper {
+public class AdvfnScraperPureJsoup {
 	public static void main(String [] args){
 		WebDriver driver = null; // Outside of try catch so that I can close upon failure
 		String url = "jdbc:mysql://localhost:3306/";
@@ -29,22 +29,36 @@ public class AdvfnScraper {
 			connection.setAutoCommit(false);
 			connection.commit();
 			Statement sUrlSettings = connection.createStatement();
-			ResultSet rsUrlSettings = sUrlSettings.executeQuery("select company, stock, quarterIndex from AdvfnQuarterIds as a where quarterIndex != 0 and not exists (select * from Q_Liquidity_Ratios as b where a.quarterDate = b.quarter_end_date and a.stock = b.stock) and not exists (select * from unparseable_stocks as c where a.stock = c.stock)");
+			ResultSet rsUrlSettings = sUrlSettings.executeQuery("select company, stock, quarterIndex, quarterDate from AdvfnQuarterIds as a where quarterIndex != 0 and not exists (select * from Q_Liquidity_Ratios as b where a.quarterDate = b.quarter_end_date and a.stock = b.stock) and not exists (select * from unparseable_stocks as c where a.stock = c.stock)");
+			//ResultSet rsUrlSettings = sUrlSettings.executeQuery("select company, stock, quarterIndex from AdvfnQuarterIds as a where quarterIndex != 0 and not exists (select * from Q_Liquidity_Ratios as b where a.quarterDate = b.quarter_end_date and a.stock = b.stock)");
 			while(rsUrlSettings.next()){
 				String exchange = "NYSE";
 				String stock = rsUrlSettings.getString("stock");
 				String company = rsUrlSettings.getString("company");
 				String quarterIndex = rsUrlSettings.getString("quarterIndex");
-				// String webUrl = "http://www.advfn.com/stock-market/NYSE/BGP/financials?btn=istart_date&istart_date=61&mode=quarterly_reports";
+				String quarter_end_date = rsUrlSettings.getString("quarterDate");
 				String webUrl = "http://www.advfn.com/stock-market/"+exchange+"/"+stock+"/financials?btn=istart_date&istart_date="+quarterIndex+"&mode=quarterly_reports";
-				driver = new FirefoxDriver();
-				driver.get(webUrl);
- 
-				Document document = Jsoup.parse(driver.getPageSource());
+				Document document = null;
+				try {
+					document = Jsoup.connect(webUrl).get();
+				} catch (Exception e){
+					Thread.sleep(10000L);
+					document = Jsoup.connect(webUrl).get();
+				}
 				Hashtable<String,Hashtable<String,String>> storableData = new Hashtable<String,Hashtable<String,String>>();
-				Elements trs = document.select("font:containsOwn(INDICATORS)")
-						.get(0).parent().parent().parent().select("tr");
-				driver.quit();
+				Elements trs = null;
+				try {
+					trs = document.select("font:containsOwn(INDICATORS)")
+							.get(0).parent().parent().parent().select("tr");
+				} catch (Exception e){
+					Hashtable<String,String> data = new Hashtable<String,String>();
+					data.put("stock",stock);
+					data.put("company", company);
+					data.put("quarter_end_date", quarter_end_date);
+					SqlToolbox.storeData(connection, "Stocks", "unparseable_stocks", data);	
+					continue;
+				}
+				
 				String sectionText = null;
 				for (Element tr : trs){
 					Elements tds = tr.select("td");
@@ -74,14 +88,8 @@ public class AdvfnScraper {
 				for(String section : sections){
 					storableData.get(section).put("company", company); // composite primary key
 					storableData.get(section).put("stock", stock); // composite primary key
-					String quarter_end_date = storableData.get("INDICATORS").get("quarter_end_date");
+					quarter_end_date = storableData.get("INDICATORS").get("quarter_end_date");
 					storableData.get(section).put("quarter_end_date",quarter_end_date); // composite primary key
-					/*
-					Set<String> fields = storableData.get(section).keySet();
-					for(String field : fields){
-						System.out.println(section+" "+field+" "+storableData.get(section).get(field));
-					}
-					*/
 				}
 				try {
 					SqlToolbox.storeData(connection, "Stocks", "Q_Indicators", storableData.get("INDICATORS"));
@@ -109,14 +117,13 @@ public class AdvfnScraper {
 					Hashtable<String,String> data = new Hashtable<String,String>();
 					data.put("stock",stock);
 					data.put("company", company);
-					String quarter_end_date = storableData.get("INDICATORS").get("quarter_end_date");
+					quarter_end_date = storableData.get("INDICATORS").get("quarter_end_date");
 					data.put("quarter_end_date", quarter_end_date);
 					SqlToolbox.storeData(connection, "Stocks", "unparseable_stocks", data);	
 				}
 				
 			}		
 		} catch (Exception e) {
-			//driver.quit();
 			e.printStackTrace();
 			System.exit(1);
 		}
